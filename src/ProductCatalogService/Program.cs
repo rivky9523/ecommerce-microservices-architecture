@@ -19,6 +19,18 @@ builder.Services.AddScoped<ProductRepository>();
 
 var app = builder.Build();
 
+// Stamp every response with the container/host that served it. With multiple
+// replicas behind the load balancer, this header reveals which instance answered.
+app.Use(async (context, next) =>
+{
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers["X-Instance-Id"] = Environment.MachineName;
+        return Task.CompletedTask;
+    });
+    await next();
+});
+
 app.UseSwagger();
 app.UseSwaggerUI(o =>
 {
