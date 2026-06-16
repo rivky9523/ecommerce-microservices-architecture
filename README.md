@@ -345,7 +345,7 @@ docker logs ecommerce-notification 2>&1 | grep PHASE5-DEMO-001
 ---
 
 ## 👩‍💻 Author
+Rivky Peretz
 
-Yehudit Pollock
-[GitHub](https://github.com/yt314)
-[Email](mailto:y556780305@gmail.com)
+[GitHub](https://github.com/rivky9523)
+[Email](mailto:r0548551732@gmail.com)
