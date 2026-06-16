@@ -1,0 +1,4 @@
+# Keep the Docker build context small and avoid copying host build artifacts.
+bin/
+obj/
+*.user
