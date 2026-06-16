@@ -1,16 +1,17 @@
-# Phase 2 — Microservices. ONE command runs all 4 services + all 4 databases.
+# Phase 3 — API Gateway + BFF + Load Balancing.
+# ONE command runs everything. The API GATEWAY (port 8080) is the ONLY app entry
+# point exposed to the host; all other services are internal.
 #
 # Before running, publish all services on the host (NuGet restore fails inside
 # Docker on this machine), then bring everything up:
 #   ./publish-all.sh        (or  ./publish-all.ps1  on PowerShell)
 #   docker compose up --build
 #
-# Database-per-service:
-#   productcatalog -> mongo (document)      inventory    -> postgres (relational)
-#   order          -> sqlserver (relational) notification -> redis (key-value)
+# Client -> apigateway (YARP) -> { catalog-lb -> productcatalog x2, inventory,
+#                                  order, notification, webbff }
 services:
 
-  # ----------------------- Databases -----------------------
+  # ----------------------- Databases (host ports kept for dev) -----------------------
 
   mongo:
     image: mongo:7
@@ -74,22 +75,31 @@ services:
     volumes:
       - redis-data:/data
 
-  # ----------------------- Services -----------------------
+  # ----------------------- Backend services (internal only) -----------------------
 
+  # NOTE: no container_name and no host ports, so it can be scaled to N replicas.
   productcatalog:
     build:
       context: ./src/ProductCatalogService
       dockerfile: Dockerfile
-    container_name: ecommerce-productcatalog
     environment:
       ASPNETCORE_ENVIRONMENT: "Development"
       Mongo__ConnectionString: "mongodb://mongo:27017"
       Mongo__Database: "ProductCatalog"
-    ports:
-      - "8081:8080"
     depends_on:
       mongo:
         condition: service_healthy
+    deploy:
+      replicas: 2
+
+  # Nginx load balancer in front of the productcatalog replicas.
+  catalog-lb:
+    image: nginx:1.27-alpine
+    container_name: ecommerce-catalog-lb
+    volumes:
+      - ./infra/catalog-lb/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - productcatalog
 
   inventory:
     build:
@@ -99,8 +109,6 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: "Development"
       ConnectionStrings__Default: "Host=postgres;Port=5432;Database=InventoryDb;Username=postgres;Password=Your_password123"
-    ports:
-      - "8082:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -113,15 +121,14 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: "Development"
       ConnectionStrings__Default: "Server=sqlserver,1433;Database=OrderDb;User Id=sa;Password=Your_password123;TrustServerCertificate=True;Encrypt=False"
-      Services__ProductCatalog: "http://productcatalog:8080"
+      # OrderService reaches the catalog through the load balancer.
+      Services__ProductCatalog: "http://catalog-lb:80"
       Services__Inventory: "http://inventory:8080"
       Services__Notification: "http://notification:8080"
-    ports:
-      - "8083:8080"
     depends_on:
       sqlserver:
         condition: service_healthy
-      productcatalog:
+      catalog-lb:
         condition: service_started
       inventory:
         condition: service_started
@@ -136,11 +143,47 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: "Development"
       Redis__ConnectionString: "redis:6379"
-    ports:
-      - "8084:8080"
     depends_on:
       redis:
         condition: service_healthy
+
+  # ----------------------- BFF (internal, reached via gateway /bff) -----------------------
+
+  webbff:
+    build:
+      context: ./src/WebBffService
+      dockerfile: Dockerfile
+    container_name: ecommerce-webbff
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Development"
+      Services__Order: "http://order:8080"
+      Services__ProductCatalog: "http://catalog-lb:80"
+    depends_on:
+      order:
+        condition: service_started
+      catalog-lb:
+        condition: service_started
+
+  # ----------------------- API Gateway (the ONLY exposed app entry) -----------------------
+
+  apigateway:
+    build:
+      context: ./src/ApiGateway
+      dockerfile: Dockerfile
+    container_name: ecommerce-apigateway
+    ports:
+      - "8080:8080"
+    depends_on:
+      catalog-lb:
+        condition: service_started
+      inventory:
+        condition: service_started
+      order:
+        condition: service_started
+      notification:
+        condition: service_started
+      webbff:
+        condition: service_started
 
 volumes:
   mongo-data:
