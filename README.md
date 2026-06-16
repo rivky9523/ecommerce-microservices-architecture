@@ -20,156 +20,82 @@ production-style microservices, phase by phase.
 
 ---
 
-## Phase 5 — Monitoring & Observability (current)
+## Phase 1 — Monolith (baseline, preserved)
 
-Every service now logs **structured** events with **Serilog** to the console and to
-a central **Seq** aggregator, and a single **Correlation ID** ties one order's whole
-journey together — including across the message broker.
-
-### What was added
-
-- **Serilog → Seq.** All 7 apps write structured logs to console + Seq. Browse and
-  filter them at **http://localhost:5341**. Each event carries `Service`,
-  `CorrelationId`, and (where relevant) `OrderId`.
-- **Correlation ID.** `X-Correlation-ID` is created (or accepted) at the **API
-  Gateway** boundary and flows down every hop:
-  - over **HTTP** via a middleware (`UseCorrelationId`) + a propagation handler on
-    outgoing calls (Order→Catalog, BFF→Order/Catalog), and
-  - over **RabbitMQ** via the message's native `BasicProperties.CorrelationId` —
-    the publisher stamps it, the consumer reads it back, so the **same id survives
-    the broker hops**, not just HTTP headers.
-- **Healthchecks.** Every .NET service exposes `/health` and has a docker-compose
-  `healthcheck` (a self-probe: `dotnet <Service>.dll --healthcheck`, no extra image
-  tooling needed). `docker ps` shows each app as `(healthy)`.
-
-### The correlation flow
-
-```
-Client ─[X-Correlation-ID?]→ API Gateway (creates id if absent, forwards it)
-  → OrderService  (Pending, PUBLISH order.placed  + CorrelationId)
-     → RabbitMQ → InventoryService (reserve, PUBLISH inventory.reserved/rejected + same CorrelationId)
-        → RabbitMQ → OrderService  (Confirm/Reject, PUBLISH order.confirmed/rejected + same CorrelationId)
-           → RabbitMQ → NotificationService (records + logs with the same CorrelationId)
-```
-
-### Trace one order in Seq
+The original monolith lives in [src/ECommerce.Monolith.Api/](src/ECommerce.Monolith.Api)
+and its compose file is [docker-compose.phase1.yml](docker-compose.phase1.yml).
+It is kept for "before vs. after" comparison. To run it on its own:
 
 ```bash
-# Send your own id so it's easy to find, or let the gateway generate one:
-curl -X POST http://localhost:8080/orders/api/orders \
-  -H "Content-Type: application/json" -H "X-Correlation-ID: PHASE5-DEMO-001" \
-  -d '{"customerEmail":"obs@demo.com","items":[{"productId":"<PID>","quantity":3}]}'
+dotnet publish ./src/ECommerce.Monolith.Api/ECommerce.Monolith.Api.csproj -c Release -o ./src/ECommerce.Monolith.Api/publish
+docker compose -f docker-compose.phase1.yml up --build
 ```
 
-1. Open **http://localhost:5341**.
-2. In the filter box enter: `CorrelationId = 'PHASE5-DEMO-001'`
-3. You see one timeline spanning **ApiGateway → OrderService → InventoryService →
-   OrderService → NotificationService**, including the `PUBLISH` / `CONSUME` events
-   that crossed RabbitMQ — all sharing that one id.
-
-You can also see it on the console:
-
-```bash
-docker logs ecommerce-order        2>&1 | grep PHASE5-DEMO-001
-docker logs ecommerce-inventory    2>&1 | grep PHASE5-DEMO-001
-docker logs ecommerce-notification 2>&1 | grep PHASE5-DEMO-001
-```
-
-### Phase 5 checkpoint checklist
-
-- [x] Seq runs (UI at http://localhost:5341)
-- [x] Every service writes structured logs (console + Seq)
-- [x] `/health` exists per service
-- [x] docker-compose healthchecks exist (apps show `(healthy)`)
-- [x] Correlation ID is created or accepted at the Gateway/API boundary
-- [x] Correlation ID appears in HTTP logs
-- [x] Correlation ID appears in the RabbitMQ message flow (survives broker hops)
-- [x] One saga can be traced end-to-end by one CorrelationId
-- [x] README and architecture docs updated
+Monolith docs: [docs/monolith-architecture.md](docs/monolith-architecture.md).
 
 ---
 
-## Phase 4 — Async Messaging, Saga & Caching (done)
-
-Order placement is now **asynchronous**. `POST /orders` returns a **Pending**
-order immediately; the final status is decided by a **RabbitMQ choreography saga**.
+## Repository structure
 
 ```
-POST /orders → Pending → [OrderPlaced] → Inventory reserves → [InventoryReserved]
-            → Order Confirmed → [OrderConfirmed] → Notification records "Confirmed"
-out of stock → [InventoryRejected] → Order Rejected → [OrderRejected] → "Rejected"
+docker-compose.yml            # Phase 4: gateway + bff + nginx LB + RabbitMQ + 4 services + 4 DBs
+docker-compose.phase1.yml     # Phase 1 monolith (preserved)
+publish-all.sh / .ps1         # publish all services before compose
+infra/
+  catalog-lb/nginx.conf       # Nginx load balancer for catalog replicas
+src/
+  ECommerce.Monolith.Api/     # Phase 1 baseline
+  Shared.Messaging/           # Phase 4: RabbitMQ contracts + publish/consume helpers
+                              #   + Phase 5: CorrelationContext (survives broker hops)
+  Shared.Observability/       # Phase 5: Serilog/Seq setup, correlation middleware,
+                              #   HTTP propagation handler, health-probe
+  ProductCatalogService/      # MongoDB (2 replicas) + Redis cache-aside (Phase 4)
+  InventoryService/           # PostgreSQL + saga consumer (Phase 4)
+  OrderService/               # SQL Server + saga publisher/consumer (Phase 4)
+  NotificationService/        # Redis + saga consumer (Phase 4)
+  WebBffService/              # BFF (aggregation, no DB)
+  ApiGateway/                 # YARP gateway (single entry point)
+docs/
+  monolith-architecture.md
+  microservices-architecture.md   # includes the Phase 3 + Phase 4 sections + diagrams
+  adr/                        # one ADR per database choice
 ```
 
-- **Broker:** RabbitMQ, durable topic exchange `ecommerce.events`, durable queues,
-  persistent messages, **management UI at http://localhost:15672 (guest/guest)**.
-- **Idempotency:** Inventory has a `ProcessedOrders` table; OrderService only acts
-  while `Pending`; NotificationService uses Redis `SET ... NX`. Consumers are
-  prefetch=1. (Details in [docs/microservices-architecture.md](docs/microservices-architecture.md).)
-- **Cache-aside:** `GET /api/products/{id}` caches to Redis key
-  `catalog:product:{id}` (logical **DB 1**); `PUT` invalidates it.
+---
 
-> **⚠️ Upgrading from a previous phase?** Phase 4 adds a table to the Inventory
-> database and the app uses `EnsureCreated` (not migrations), which won't alter an
-> existing DB. Run a **one-time** `docker compose down -v` before `up` so all
-> schemas are recreated. (On a fresh machine this is automatic.)
+## Phase 2 — Microservices (preserved, now behind the gateway)
 
-### Run it
+The four services and their databases from Phase 2 are unchanged. **In Phase 3
+their direct host ports are no longer exposed** — reach them through the gateway
+(see the Phase 3 section above).
 
-```bash
-./publish-all.sh            # or  .\publish-all.ps1
-docker compose down -v      # only when upgrading from an earlier phase's volumes
-docker compose up --build   # gateway + bff + nginx LB + RabbitMQ + 4 services + 4 DBs
-```
+| Service | Responsibility | Database | Family | Gateway prefix |
+|---|---|---|---|---|
+| ProductCatalogService | products: create/list/get/update | **MongoDB** | document | `/catalog` |
+| InventoryService | stock: get/update/reserve/release | **PostgreSQL** | relational | `/inventory` |
+| OrderService | orders: place/list/get + orchestration | **SQL Server** | relational | `/orders` |
+| NotificationService | record/"send" notifications | **Redis** | key-value | `/notifications` |
 
-### Test the async happy path
+Each service owns its own database and **never** accesses another service's
+database — the only cross-service access is HTTP. Database design rationale is in
+the ADRs in [docs/adr/](docs/adr); architecture details in
+[docs/microservices-architecture.md](docs/microservices-architecture.md).
 
-```bash
-# create a product + stock
-PID=...   # id returned by POST /catalog/api/products, then PUT /inventory/api/inventory/$PID {"quantityAvailable":5,...}
-# place order — returns status "Pending" immediately
-curl -X POST http://localhost:8080/orders/api/orders -H "Content-Type: application/json" \
-  -d '{"customerEmail":"a@b.com","items":[{"productId":"'$PID'","quantity":2}]}'
-# poll — becomes "Confirmed" within ~1-2s; inventory available drops, reserved rises
-curl http://localhost:8080/orders/api/orders/<ORDER_ID>
-curl http://localhost:8080/notifications/api/notifications     # a "Confirmed" record appears
-```
+Order placement (now also reachable via the gateway): OrderService validates each
+product against ProductCatalogService, reserves stock via InventoryService,
+persists a Confirmed/Rejected order, and records a notification via
+NotificationService.
 
-### Test the out-of-stock failure path
+### Ports summary
 
-```bash
-# product with only 1 in stock, order 10:
-curl -X POST http://localhost:8080/orders/api/orders -H "Content-Type: application/json" \
-  -d '{"customerEmail":"a@b.com","items":[{"productId":"'$PID'","quantity":10}]}'
-curl http://localhost:8080/orders/api/orders/<ORDER_ID>   # becomes "Rejected" with a reason
-# inventory stays UNCHANGED; a "Rejected" notification is recorded
-```
+| Component | URL / Port | Exposed to host? |
+|---|---|---|
+| **API Gateway** | http://localhost:8080 | **Yes (only app entry)** |
+| **RabbitMQ management UI** | http://localhost:15672 (guest/guest) | Yes (dev) |
+| **Seq log aggregator (Phase 5)** | http://localhost:5341 | Yes (dev) |
+| ProductCatalogService (×2), Inventory, Order, Notification, BFF, catalog-lb | — | No (internal) |
+| MongoDB / PostgreSQL / SQL Server / Redis / RabbitMQ-AMQP | 27017 / 5432 / 1433 / 6379 / 5672 | Yes (dev convenience) |
 
-### Prove cache miss vs hit
-
-```bash
-# GET the same product twice, then update it, then GET again:
-curl http://localhost:8080/catalog/api/products/<PID>   # x2
-curl -X PUT http://localhost:8080/catalog/api/products/<PID> -H "Content-Type: application/json" -d '{...}'
-curl http://localhost:8080/catalog/api/products/<PID>
-# inspect logs of both replicas:
-docker logs project-ai-productcatalog-1 | grep CACHE
-docker logs project-ai-productcatalog-2 | grep CACHE
-# expect: CACHE MISS, then CACHE HIT, then CACHE INVALIDATE, then CACHE MISS
-```
-
-### Phase 4 checkpoint checklist
-
-- [ ] RabbitMQ runs (UI at http://localhost:15672, guest/guest)
-- [ ] OrderService publishes `OrderPlaced`; order returns as Pending
-- [ ] InventoryService consumes `OrderPlaced` and reserves stock
-- [ ] InventoryService publishes `InventoryReserved` / `InventoryRejected`
-- [ ] OrderService confirms/rejects the order asynchronously
-- [ ] NotificationService records the final notification from events
-- [ ] Out-of-stock order becomes Rejected, inventory unchanged
-- [ ] Cache-aside works: `CACHE MISS` then `CACHE HIT` in catalog logs
-- [ ] Gateway and BFF still work
-- [ ] `docker compose up` runs everything from the root
-- [ ] README and architecture docs updated
 
 ---
 
@@ -265,78 +191,161 @@ docker start project-ai-productcatalog-1
 
 ---
 
-## Phase 2 — Microservices (preserved, now behind the gateway)
+## Phase 4 — Async Messaging, Saga & Caching (done)
 
-The four services and their databases from Phase 2 are unchanged. **In Phase 3
-their direct host ports are no longer exposed** — reach them through the gateway
-(see the Phase 3 section above).
+Order placement is now **asynchronous**. `POST /orders` returns a **Pending**
+order immediately; the final status is decided by a **RabbitMQ choreography saga**.
 
-| Service | Responsibility | Database | Family | Gateway prefix |
-|---|---|---|---|---|
-| ProductCatalogService | products: create/list/get/update | **MongoDB** | document | `/catalog` |
-| InventoryService | stock: get/update/reserve/release | **PostgreSQL** | relational | `/inventory` |
-| OrderService | orders: place/list/get + orchestration | **SQL Server** | relational | `/orders` |
-| NotificationService | record/"send" notifications | **Redis** | key-value | `/notifications` |
+```
+POST /orders → Pending → [OrderPlaced] → Inventory reserves → [InventoryReserved]
+            → Order Confirmed → [OrderConfirmed] → Notification records "Confirmed"
+out of stock → [InventoryRejected] → Order Rejected → [OrderRejected] → "Rejected"
+```
 
-Each service owns its own database and **never** accesses another service's
-database — the only cross-service access is HTTP. Database design rationale is in
-the ADRs in [docs/adr/](docs/adr); architecture details in
-[docs/microservices-architecture.md](docs/microservices-architecture.md).
+- **Broker:** RabbitMQ, durable topic exchange `ecommerce.events`, durable queues,
+  persistent messages, **management UI at http://localhost:15672 (guest/guest)**.
+- **Idempotency:** Inventory has a `ProcessedOrders` table; OrderService only acts
+  while `Pending`; NotificationService uses Redis `SET ... NX`. Consumers are
+  prefetch=1. (Details in [docs/microservices-architecture.md](docs/microservices-architecture.md).)
+- **Cache-aside:** `GET /api/products/{id}` caches to Redis key
+  `catalog:product:{id}` (logical **DB 1**); `PUT` invalidates it.
 
-Order placement (now also reachable via the gateway): OrderService validates each
-product against ProductCatalogService, reserves stock via InventoryService,
-persists a Confirmed/Rejected order, and records a notification via
-NotificationService.
+> **⚠️ Upgrading from a previous phase?** Phase 4 adds a table to the Inventory
+> database and the app uses `EnsureCreated` (not migrations), which won't alter an
+> existing DB. Run a **one-time** `docker compose down -v` before `up` so all
+> schemas are recreated. (On a fresh machine this is automatic.)
 
-### Ports summary
-
-| Component | URL / Port | Exposed to host? |
-|---|---|---|
-| **API Gateway** | http://localhost:8080 | **Yes (only app entry)** |
-| **RabbitMQ management UI** | http://localhost:15672 (guest/guest) | Yes (dev) |
-| **Seq log aggregator (Phase 5)** | http://localhost:5341 | Yes (dev) |
-| ProductCatalogService (×2), Inventory, Order, Notification, BFF, catalog-lb | — | No (internal) |
-| MongoDB / PostgreSQL / SQL Server / Redis / RabbitMQ-AMQP | 27017 / 5432 / 1433 / 6379 / 5672 | Yes (dev convenience) |
-
----
-
-## Phase 1 — Monolith (baseline, preserved)
-
-The original monolith lives in [src/ECommerce.Monolith.Api/](src/ECommerce.Monolith.Api)
-and its compose file is [docker-compose.phase1.yml](docker-compose.phase1.yml).
-It is kept for "before vs. after" comparison. To run it on its own:
+### Run it
 
 ```bash
-dotnet publish ./src/ECommerce.Monolith.Api/ECommerce.Monolith.Api.csproj -c Release -o ./src/ECommerce.Monolith.Api/publish
-docker compose -f docker-compose.phase1.yml up --build
+./publish-all.sh            # or  .\publish-all.ps1
+docker compose down -v      # only when upgrading from an earlier phase's volumes
+docker compose up --build   # gateway + bff + nginx LB + RabbitMQ + 4 services + 4 DBs
 ```
 
-Monolith docs: [docs/monolith-architecture.md](docs/monolith-architecture.md).
+### Test the async happy path
+
+```bash
+# create a product + stock
+PID=...   # id returned by POST /catalog/api/products, then PUT /inventory/api/inventory/$PID {"quantityAvailable":5,...}
+# place order — returns status "Pending" immediately
+curl -X POST http://localhost:8080/orders/api/orders -H "Content-Type: application/json" \
+  -d '{"customerEmail":"a@b.com","items":[{"productId":"'$PID'","quantity":2}]}'
+# poll — becomes "Confirmed" within ~1-2s; inventory available drops, reserved rises
+curl http://localhost:8080/orders/api/orders/<ORDER_ID>
+curl http://localhost:8080/notifications/api/notifications     # a "Confirmed" record appears
+```
+
+### Test the out-of-stock failure path
+
+```bash
+# product with only 1 in stock, order 10:
+curl -X POST http://localhost:8080/orders/api/orders -H "Content-Type: application/json" \
+  -d '{"customerEmail":"a@b.com","items":[{"productId":"'$PID'","quantity":10}]}'
+curl http://localhost:8080/orders/api/orders/<ORDER_ID>   # becomes "Rejected" with a reason
+# inventory stays UNCHANGED; a "Rejected" notification is recorded
+```
+
+### Prove cache miss vs hit
+
+```bash
+# GET the same product twice, then update it, then GET again:
+curl http://localhost:8080/catalog/api/products/<PID>   # x2
+curl -X PUT http://localhost:8080/catalog/api/products/<PID> -H "Content-Type: application/json" -d '{...}'
+curl http://localhost:8080/catalog/api/products/<PID>
+# inspect logs of both replicas:
+docker logs project-ai-productcatalog-1 | grep CACHE
+docker logs project-ai-productcatalog-2 | grep CACHE
+# expect: CACHE MISS, then CACHE HIT, then CACHE INVALIDATE, then CACHE MISS
+```
+
+### Phase 4 checkpoint checklist
+
+- [ ] RabbitMQ runs (UI at http://localhost:15672, guest/guest)
+- [ ] OrderService publishes `OrderPlaced`; order returns as Pending
+- [ ] InventoryService consumes `OrderPlaced` and reserves stock
+- [ ] InventoryService publishes `InventoryReserved` / `InventoryRejected`
+- [ ] OrderService confirms/rejects the order asynchronously
+- [ ] NotificationService records the final notification from events
+- [ ] Out-of-stock order becomes Rejected, inventory unchanged
+- [ ] Cache-aside works: `CACHE MISS` then `CACHE HIT` in catalog logs
+- [ ] Gateway and BFF still work
+- [ ] `docker compose up` runs everything from the root
+- [ ] README and architecture docs updated
 
 ---
 
-## Repository structure
+## Phase 5 — Monitoring & Observability (current)
+
+Every service now logs **structured** events with **Serilog** to the console and to
+a central **Seq** aggregator, and a single **Correlation ID** ties one order's whole
+journey together — including across the message broker.
+
+### What was added
+
+- **Serilog → Seq.** All 7 apps write structured logs to console + Seq. Browse and
+  filter them at **http://localhost:5341**. Each event carries `Service`,
+  `CorrelationId`, and (where relevant) `OrderId`.
+- **Correlation ID.** `X-Correlation-ID` is created (or accepted) at the **API
+  Gateway** boundary and flows down every hop:
+  - over **HTTP** via a middleware (`UseCorrelationId`) + a propagation handler on
+    outgoing calls (Order→Catalog, BFF→Order/Catalog), and
+  - over **RabbitMQ** via the message's native `BasicProperties.CorrelationId` —
+    the publisher stamps it, the consumer reads it back, so the **same id survives
+    the broker hops**, not just HTTP headers.
+- **Healthchecks.** Every .NET service exposes `/health` and has a docker-compose
+  `healthcheck` (a self-probe: `dotnet <Service>.dll --healthcheck`, no extra image
+  tooling needed). `docker ps` shows each app as `(healthy)`.
+
+### The correlation flow
 
 ```
-docker-compose.yml            # Phase 4: gateway + bff + nginx LB + RabbitMQ + 4 services + 4 DBs
-docker-compose.phase1.yml     # Phase 1 monolith (preserved)
-publish-all.sh / .ps1         # publish all services before compose
-infra/
-  catalog-lb/nginx.conf       # Nginx load balancer for catalog replicas
-src/
-  ECommerce.Monolith.Api/     # Phase 1 baseline
-  Shared.Messaging/           # Phase 4: RabbitMQ contracts + publish/consume helpers
-                              #   + Phase 5: CorrelationContext (survives broker hops)
-  Shared.Observability/       # Phase 5: Serilog/Seq setup, correlation middleware,
-                              #   HTTP propagation handler, health-probe
-  ProductCatalogService/      # MongoDB (2 replicas) + Redis cache-aside (Phase 4)
-  InventoryService/           # PostgreSQL + saga consumer (Phase 4)
-  OrderService/               # SQL Server + saga publisher/consumer (Phase 4)
-  NotificationService/        # Redis + saga consumer (Phase 4)
-  WebBffService/              # BFF (aggregation, no DB)
-  ApiGateway/                 # YARP gateway (single entry point)
-docs/
-  monolith-architecture.md
-  microservices-architecture.md   # includes the Phase 3 + Phase 4 sections + diagrams
-  adr/                        # one ADR per database choice
+Client ─[X-Correlation-ID?]→ API Gateway (creates id if absent, forwards it)
+  → OrderService  (Pending, PUBLISH order.placed  + CorrelationId)
+     → RabbitMQ → InventoryService (reserve, PUBLISH inventory.reserved/rejected + same CorrelationId)
+        → RabbitMQ → OrderService  (Confirm/Reject, PUBLISH order.confirmed/rejected + same CorrelationId)
+           → RabbitMQ → NotificationService (records + logs with the same CorrelationId)
 ```
+
+### Trace one order in Seq
+
+```bash
+# Send your own id so it's easy to find, or let the gateway generate one:
+curl -X POST http://localhost:8080/orders/api/orders \
+  -H "Content-Type: application/json" -H "X-Correlation-ID: PHASE5-DEMO-001" \
+  -d '{"customerEmail":"obs@demo.com","items":[{"productId":"<PID>","quantity":3}]}'
+```
+
+1. Open **http://localhost:5341**.
+2. In the filter box enter: `CorrelationId = 'PHASE5-DEMO-001'`
+3. You see one timeline spanning **ApiGateway → OrderService → InventoryService →
+   OrderService → NotificationService**, including the `PUBLISH` / `CONSUME` events
+   that crossed RabbitMQ — all sharing that one id.
+
+You can also see it on the console:
+
+```bash
+docker logs ecommerce-order        2>&1 | grep PHASE5-DEMO-001
+docker logs ecommerce-inventory    2>&1 | grep PHASE5-DEMO-001
+docker logs ecommerce-notification 2>&1 | grep PHASE5-DEMO-001
+```
+
+### Phase 5 checkpoint checklist
+
+- [x] Seq runs (UI at http://localhost:5341)
+- [x] Every service writes structured logs (console + Seq)
+- [x] `/health` exists per service
+- [x] docker-compose healthchecks exist (apps show `(healthy)`)
+- [x] Correlation ID is created or accepted at the Gateway/API boundary
+- [x] Correlation ID appears in HTTP logs
+- [x] Correlation ID appears in the RabbitMQ message flow (survives broker hops)
+- [x] One saga can be traced end-to-end by one CorrelationId
+- [x] README and architecture docs updated
+
+---
+
+## 👩‍💻 Author
+
+Yehudit Pollock
+[GitHub](https://github.com/yt314)
+[Email](mailto:y556780305@gmail.com)
