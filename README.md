@@ -160,3 +160,11 @@ docs/
   microservices-architecture.md
   adr/                        # one ADR per database choice
 ```
+
+
+
+## 👩‍💻 Author
+Rivky Peretz
+
+[GitHub](https://github.com/rivky9523)
+[Email](mailto:r0548551732@gmail.com)
