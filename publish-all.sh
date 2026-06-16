@@ -4,7 +4,7 @@
 # fails inside Docker on this machine.
 set -e
 
-services=(ProductCatalogService InventoryService OrderService NotificationService)
+services=(ProductCatalogService InventoryService OrderService NotificationService WebBffService ApiGateway)
 for svc in "${services[@]}"; do
   echo "=== Publishing $svc ==="
   rm -rf "./src/$svc/publish"

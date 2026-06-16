@@ -3,7 +3,7 @@
 # fails inside Docker on this machine.
 $ErrorActionPreference = "Stop"
 
-$services = @("ProductCatalogService", "InventoryService", "OrderService", "NotificationService")
+$services = @("ProductCatalogService", "InventoryService", "OrderService", "NotificationService", "WebBffService", "ApiGateway")
 foreach ($svc in $services) {
     Write-Host "=== Publishing $svc ==="
     Remove-Item -Recurse -Force ".\src\$svc\publish" -ErrorAction SilentlyContinue

@@ -14,6 +14,15 @@ public class ProductsController : ControllerBase
 
     public ProductsController(ProductRepository repository) => _repository = repository;
 
+    /// <summary>
+    /// Returns which replica/container served this request. Used to prove load
+    /// balancing: call it repeatedly through the gateway and watch the id change.
+    /// Declared before the "{id}" route so the literal "instance" wins.
+    /// </summary>
+    [HttpGet("instance")]
+    public ActionResult<object> Instance()
+        => Ok(new { instanceId = Environment.MachineName, service = "ProductCatalogService" });
+
     /// <summary>Create a product.</summary>
     [HttpPost]
     public async Task<ActionResult<ProductResponse>> Create(CreateProductRequest request)
