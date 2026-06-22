@@ -284,7 +284,7 @@ journey together — including across the message broker.
 ### What was added
 
 - **Serilog → Seq.** All 7 apps write structured logs to console + Seq. Browse and
-  filter them at **http://localhost:5341**. Each event carries `Service`,
+  filter them at **http://localhost:5341**.Each event carries `Service`,
   `CorrelationId`, and (where relevant) `OrderId`.
 - **Correlation ID.** `X-Correlation-ID` is created (or accepted) at the **API
   Gateway** boundary and flows down every hop:
