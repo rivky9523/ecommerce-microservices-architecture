@@ -4,8 +4,8 @@
 
 Take a working monolithic API and evolve it, step by step, into a distributed, production-style system that demonstrates everything we covered in this course: containers, microservices, caching, async messaging, saga, API gateway, BFF, load balancing, polyglot persistence, and monitoring.
 
-> **💡 Important — you are NOT limited to the technologies we used in class.**
-> Everywhere this document names a tool (RabbitMQ, Redis, Ocelot, Nginx, MongoDB, Serilog...), you may substitute an equivalent technology that was **not** taught in class — for example **Kafka instead of RabbitMQ**, **YARP instead of Ocelot**, **Traefik or HAProxy instead of Nginx**, **DynamoDB-local or CouchDB instead of MongoDB**, **OpenTelemetry + Grafana instead of ELK**.
+> ** Important — you are NOT limited to the technologies we used in class.**
+> Everywhere this document names a tool (RabbitMQ, Redis, Ocelot, Nginx, MongoDB, Serilog...) , you may substitute an equivalent technology that was **not** taught in class — for example **Kafka instead of RabbitMQ**, **YARP instead of Ocelot**, **Traefik or HAProxy instead of Nginx**, **DynamoDB-local or CouchDB instead of MongoDB**, **OpenTelemetry + Grafana instead of ELK**.
 > Using a technology we didn't cover is **encouraged** — but you must be able to **explain why you chose it** and how it compares to the class alternative.
 
 ---
@@ -34,7 +34,7 @@ Core capabilities the final system must support:
 
 **Task 1.3** — Document the monolith: one diagram, list of endpoints, and 3 problems you expect this architecture to have at scale.
 
-> 💡 *Hint: keep the monolith intentionally simple — it exists so you can compare "before vs. after". Don't gold-plate it.*
+>  *Hint: keep the monolith intentionally simple — it exists so you can compare "before vs. after". Don't gold-plate it.*
 
 **✔ Checkpoint:** `docker compose up` → you can create a product, place an order, and see inventory decrease.
 
@@ -59,9 +59,9 @@ Core capabilities the final system must support:
 
 **Task 2.4** — Write a short **Architecture Decision Record (ADR)** per database choice, using the vocabulary from the Databases lesson: ACID, BASE, CAP, consistency model.
 
-> 💡 *Hint: notice that Redis (Phase 4) is already a NoSQL key-value store — you'll be using two NoSQL families without even trying.*
+>  *Hint: notice that Redis (Phase 4) is already a NoSQL key-value store — you'll be using two NoSQL families without even trying.*
 
-> **💡 Reminder: any equivalent database technology is allowed** — Cosmos DB, RavenDB, Cassandra, Neo4j... as long as your ADR justifies the family choice.
+> ** Reminder: any equivalent database technology is allowed** — Cosmos DB, RavenDB, Cassandra, Neo4j... as long as your ADR justifies the family choice.
 
 **✔ Checkpoint:** all services run in docker-compose, each with its own data store, and an order can still be placed end-to-end (synchronous HTTP between services is fine *for now*).
 
@@ -75,7 +75,7 @@ Core capabilities the final system must support:
 
 **Task 3.3** — Run **2+ replicas** of one service (suggested: `ProductCatalogService`) behind a **load balancer** (Nginx — **or Traefik / HAProxy / built-in Docker load balancing**). Prove the load balancing works (hint: return the container ID in a response header and call the endpoint repeatedly).
 
-> 💡 *Hint: think about what belongs in the gateway (routing, rate limiting, auth) vs. what belongs in the BFF (aggregation, client-specific shaping). Be ready to defend the boundary.*
+>  *Hint: think about what belongs in the gateway (routing, rate limiting, auth) vs. what belongs in the BFF (aggregation, client-specific shaping). Be ready to defend the boundary.*
 
 **✔ Checkpoint:** the client talks only to the gateway; killing one catalog replica doesn't break the system.
 
@@ -96,7 +96,7 @@ Core capabilities the final system must support:
 
 **Task 4.4** — Add **Redis** (or another distributed cache) to `ProductCatalogService` reads using the **cache-aside** pattern. Show cache hit vs. miss in your logs, and decide on an invalidation strategy when a product is updated.
 
-> 💡 *Hint: at-least-once delivery means your consumers may receive the same message twice. What makes a consumer idempotent?*
+>  *Hint: at-least-once delivery means your consumers may receive the same message twice. What makes a consumer idempotent?*
 
 **✔ Checkpoint:** happy path and compensation path both work end-to-end through the broker; repeated catalog reads hit the cache.
 
@@ -110,13 +110,13 @@ Core capabilities the final system must support:
 
 **Task 5.3** — **Correlation ID**: a single order's journey must be traceable across all services and the broker with one ID. Show one full saga traced in the logs.
 
-> 💡 *Hint: the correlation ID has to survive the trip through the message broker, not just HTTP headers.*
+>  *Hint: the correlation ID has to survive the trip through the message broker, not just HTTP headers.*
 
 **✔ Checkpoint:** given an order ID, you can show its complete story across all services from the log aggregator.
 
 ---
 
-## 🌟 Bonus Phases (choose any — extra credit)
+##  Bonus Phases (choose any — extra credit)
 
 - **Kafka deep-dive:** if you used RabbitMQ, add one Kafka-based flow (or vice versa) and compare them in writing.
 - **Orchestration Saga:** re-implement the saga with a central orchestrator and compare to choreography.
@@ -125,7 +125,7 @@ Core capabilities the final system must support:
 - **Resilience patterns:** Polly-based retry + circuit breaker on inter-service calls; demonstrate the circuit opening.
 - **Grafana dashboard:** metrics (request rate, error rate, queue depth) visualized.
 
-### 🌟 Bonus Phase — CI/CD Pipeline (recommended bonus, up to +5%)
+###  Bonus Phase — CI/CD Pipeline (recommended bonus, up to +5%)
 
 **Task B.1** — Create a pipeline (GitHub Actions — **or GitLab CI, Azure DevOps, Jenkins...**) that triggers on every push/PR and **builds all services**.
 
@@ -135,15 +135,15 @@ Core capabilities the final system must support:
 
 **Task B.4** — *Stretch:* push the images to a registry (Docker Hub / GitHub Container Registry) and add a **smoke-test job**: run `docker compose up`, wait for all `/health` endpoints to return healthy, then tear down.
 
-> 💡 *Hint: do you really need to rebuild every service on every push? Can your pipeline detect which folders changed?*
+>  *Hint: do you really need to rebuild every service on every push? Can your pipeline detect which folders changed?*
 
-> **💡 As always — any CI/CD technology is allowed**, but explain your choice in the architecture document.
+> ** As always — any CI/CD technology is allowed**, but explain your choice in the architecture document.
 
 **✔ Checkpoint:** a green pipeline badge in your `README.md`, and a failing test visibly blocks the merge.
 
 ---
 
-## 📦 Deliverables
+##  Deliverables
 
 1. **Git repository** — all services, `docker-compose.yml`, and a root `README.md` with one-command startup instructions.
 2. **Architecture document** (2–4 pages): final diagram, the ADRs from Task 2.4, and your messaging-technology comparison if you went off-script.
@@ -152,7 +152,7 @@ Core capabilities the final system must support:
 
 ---
 
-## 🧮 Grading Rubric
+##  Grading Rubric
 
 | Component | Weight |
 |---|---|
@@ -167,7 +167,7 @@ Core capabilities the final system must support:
 
 ---
 
-## ⚠️ Rules
+##  Rules
 
 - **No copying full solutions.** AI assistants are allowed as helpers (as practiced in class) — but you must understand and be able to explain every line you submit.
 - Every service must run via the single root `docker-compose.yml`.
